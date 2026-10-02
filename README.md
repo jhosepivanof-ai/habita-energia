@@ -45,7 +45,9 @@ La prueba opcional `tests/browser-smoke.cjs` usa Playwright y Edge. Define `HABI
 
 Con `apiBase` vacío en `config.json`, el asistente da análisis local limitado y lo identifica. Si existe un servidor privado, configura su URL HTTPS y el código de acceso solicitado por ese servicio. Una URL o un código guardado solo muestran “Conexión pendiente de comprobar”. El indicador “Respuesta de DeepSeek” aparece al recibir una respuesta válida; si falla, se identifica explícitamente el análisis local.
 
-GitHub Pages sirve archivos estáticos y no ejecuta `server.mjs`. La clave de DeepSeek debe mantenerse en variables privadas del servidor, nunca en HTML, JavaScript, CSV ni GitHub. Esta actualización no publica claves ni habilita un nuevo servicio de pago. El servidor local opcional puede usar `DEEPSEEK_API_KEY` y `ALLOWED_ORIGINS` para pruebas controladas; no debe desplegarse públicamente sin protección y límites adecuados.
+GitHub Pages sirve archivos estáticos y no ejecuta `server.mjs`. `config.json` conecta el tablero con el servidor de IA autorizado. Para conversar con DeepSeek, introduce tu código privado y pulsa **Guardar código**; se conserva solo durante la sesión de esa pestaña. Cada consulta envía la pregunta y las lecturas simuladas actuales al servidor y a DeepSeek, y consume saldo según uso. No envíes información sensible. El asistente conversa y explica el tablero; las acciones automáticas siguen a cargo del modelo y las reglas de simulación.
+
+La clave de DeepSeek permanece en las variables privadas del servidor, nunca en HTML, JavaScript, CSV ni GitHub. El servicio restringe el origen del navegador, exige código y limita peticiones por IP; el código es compartido y no sustituye cuentas individuales. No compartas el archivo privado de acceso ni lo incluyas en la entrega académica. El servidor local opcional puede usar `DEEPSEEK_API_KEY` y `ALLOWED_ORIGINS` para pruebas controladas; no debe desplegarse públicamente sin protección y límites adecuados.
 
 ## Evolución física
 
