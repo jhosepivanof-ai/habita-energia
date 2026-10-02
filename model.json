@@ -1,0 +1,60 @@
+{
+  "provenance": "Datos sintéticos reproducibles. Ningún registro representa medición real.",
+  "seed": 20261001,
+  "start": "2026-06-01T00:00:00",
+  "records": 4031,
+  "split": {
+    "train": 2418,
+    "validation": 806,
+    "test": 807
+  },
+  "features": [
+    "intercepto",
+    "ocupacion_actual",
+    "sin_hora",
+    "cos_hora",
+    "fin_semana",
+    "temperatura_c_escalada",
+    "humedad_pct_escalada",
+    "aire_encendido"
+  ],
+  "coefficients": [
+    -0.8256420994788293,
+    1.7123689425545663,
+    0.2497755977439027,
+    0.5585479872601349,
+    0.125522512222384,
+    -0.5424853669493415,
+    -0.05421121526239431,
+    0.5372473324581011
+  ],
+  "threshold": 0.3749999999999999,
+  "assumptions": {
+    "power_kw": 0.953,
+    "slot_h": 0.5,
+    "price_cop_kwh": 1000,
+    "comfort_cost_cop": 1500
+  },
+  "validation": {
+    "n": 806,
+    "accuracy_model": 0.7816377171215881,
+    "accuracy_baseline": 0.7903225806451613,
+    "brier_model": 0.1538922241899444,
+    "brier_baseline": 0.20967741935483872,
+    "decision_cost_model_cop": 352092.0,
+    "decision_cost_baseline_cop": 358602.5,
+    "false_off_model": 67,
+    "false_off_baseline": 85
+  },
+  "test": {
+    "n": 807,
+    "accuracy_model": 0.7806691449814126,
+    "accuracy_baseline": 0.7992565055762082,
+    "brier_model": 0.15464535118763947,
+    "brier_baseline": 0.20074349442379183,
+    "decision_cost_model_cop": 369051.5,
+    "decision_cost_baseline_cop": 367374.0,
+    "false_off_model": 71,
+    "false_off_baseline": 81
+  }
+}
