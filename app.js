@@ -11,6 +11,7 @@ try { const saved=JSON.parse(localStorage.getItem('habita-devices')||'[]'); if(A
 let devices=[...defaults,...extras];
 let overrides={};
 let minute=19*60+30, day=1, speed=2, paused=false, model=null, aiBase='';
+let accessCode=sessionStorage.getItem('habita-ai-code')||'';
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
 const fmt=n=>Math.round(n).toLocaleString('es-CO');
 const hour=m=>m/60;
@@ -33,11 +34,51 @@ function renderPrediction(a){const p=probability(minute,a);if(p===null)return;$(
 function render(){const a=ambient(minute);$('time').textContent=timeLabel(minute);$('day').textContent=`Día simulado ${day}`;$('rate').textContent=`1 s = ${speed} min`;$('temp').textContent=`${a.t.toFixed(1).replace('.',',')} °C`;$('humidity').textContent=`${Math.round(a.rh)} %`;$('occupancy').textContent=`${occupancy(minute)} ${occupancy(minute)===1?'persona':'personas'}`;$('power').textContent=`${fmt(total(minute))} W`;spark('spark-temp',m=>ambient(m).t,'#0ca994');spark('spark-humidity',m=>ambient(m).rh,'#2987cc');spark('spark-occupancy',occupancy,'#36ab65');spark('spark-power',total,'#8465c6');renderDevices();renderBreakdown();renderChart();renderPrediction(a);}
 function appendMessage(text,who){const p=document.createElement('p');p.className=`bubble ${who}`;p.textContent=text;$('messages').append(p);$('messages').scrollTop=$('messages').scrollHeight;}
 function localAnswer(q){const s=q.toLocaleLowerCase('es');const a=ambient(minute);if(/consum|potencia|gasta|equipo|energ[ií]a/.test(s)){const top=[...devices].sort((x,y)=>watt(y,minute)-watt(x,minute))[0];return `Ahora la potencia total estimada es ${fmt(total(minute))} W. ${top&&watt(top,minute)>0?`El mayor aporte es ${top.name}, con ${fmt(watt(top,minute))} W simulados.`:'Todos los equipos están apagados en la simulación.'} No es una medición real.`;}if(/temperatura|humedad|ambiente|calor/.test(s))return `En esta escena simulada hay ${a.t.toFixed(1).replace('.',',')} °C y ${Math.round(a.rh)} % de humedad relativa. Son valores generados, aún no llegan del BME680.`;if(/ocupaci|persona|predic|modelo/.test(s)){const p=probability(minute,a);return p===null?'El modelo aún no termina de cargar.':`Hay ${occupancy(minute)} personas simuladas ahora. El modelo estima ${Math.round(p*100)} % de probabilidad de ocupación dentro de 30 minutos. Se entrenó solo con datos sintéticos.`;}return 'Puedo analizar temperatura, humedad, ocupación y consumo de este tablero simulado. Para conversar libremente con DeepSeek falta conectar el servidor privado; nunca pondremos la clave en GitHub Pages.';}
-async function askAI(question){if(!aiBase)return localAnswer(question);try{const r=await fetch(`${aiBase.replace(/\/$/,'')}/api/chat`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({question,context:{time:timeLabel(minute),temperature_c:+ambient(minute).t.toFixed(1),humidity_pct:Math.round(ambient(minute).rh),occupancy:occupancy(minute),power_w:total(minute),devices:devices.map(d=>({name:d.name,power_w:watt(d,minute)})),data_origin:'simulated'}})});if(!r.ok)throw Error('Servidor no disponible');const data=await r.json();return typeof data.answer==='string'?data.answer:localAnswer(question);}catch{return `${localAnswer(question)} El servidor de DeepSeek no respondió; esta es una respuesta local limitada.`;}}
+async function askAI(question){
+  if(!aiBase)return localAnswer(question);
+  if(!accessCode)return 'Introduce el código de acceso al asistente para consultar DeepSeek.';
+  try {
+    const r=await fetch(`${aiBase.replace(/\/$/,'')}/api/chat`,{
+      method:'POST',
+      headers:{'content-type':'application/json','x-app-code':accessCode},
+      body:JSON.stringify({question,context:{time:timeLabel(minute),temperature_c:+ambient(minute).t.toFixed(1),humidity_pct:Math.round(ambient(minute).rh),occupancy:occupancy(minute),power_w:total(minute),devices:devices.map(d=>({name:d.name,power_w:watt(d,minute)})),data_origin:'simulated'}})
+    });
+    const data=await r.json().catch(()=>({}));
+    if(r.status===401)return 'Código de acceso incorrecto. Revísalo e inténtalo de nuevo.';
+    if(!r.ok)throw Error(data.error||'Servidor no disponible');
+    return typeof data.answer==='string'?data.answer:localAnswer(question);
+  } catch {
+    return `${localAnswer(question)} DeepSeek no respondió; esta es una respuesta local limitada.`;
+  }
+}
 $('pause').addEventListener('click',()=>{paused=!paused;$('pause').textContent=paused?'Reanudar':'Pausar';});$('speed').addEventListener('click',()=>{speed=speed===2?8:2;$('speed').textContent=speed===2?'Velocidad ×4':'Velocidad normal';render();});$('reset').addEventListener('click',()=>{minute=19*60+30;day=1;overrides={};render();});
 const dialog=$('device-dialog');$('add').addEventListener('click',()=>dialog.showModal());$('close').addEventListener('click',()=>dialog.close());$('cancel').addEventListener('click',()=>dialog.close());$('device-form').addEventListener('submit',e=>{e.preventDefault();const name=$('new-name').value.trim(),watts=Number($('new-watts').value);if(!name||!Number.isFinite(watts)||watts<1||watts>5000||devices.length>=15)return;devices.push({id:`extra-${Date.now()}`,name,kind:'extra',watts,source:'Potencia supuesta',enabled:true});saveExtras();$('device-form').reset();dialog.close();render();});
 $('chat-form').addEventListener('submit',async e=>{e.preventDefault();const input=$('question'),q=input.value.trim();if(!q)return;appendMessage(q,'user');input.value='';const button=$('chat-form').querySelector('button');button.disabled=true;button.textContent='Pensando…';appendMessage(await askAI(q),'bot');button.disabled=false;button.textContent='Enviar';});
 fetch('model.json').then(r=>{if(!r.ok)throw Error('Modelo no disponible');return r.json();}).then(x=>{model=x;render();}).catch(()=>{$('advice').textContent='No se pudo cargar el modelo. La simulación continúa, pero la predicción está deshabilitada.';});
-fetch('config.json').then(r=>r.ok?r.json():{}).then(x=>{if(x&&typeof x.apiBase==='string'&&/^https:\/\//.test(x.apiBase))aiBase=x.apiBase;$('ai-status').textContent=aiBase?'DeepSeek configurado':'Análisis local';}).catch(()=>{$('ai-status').textContent='Análisis local';});
+fetch('config.json').then(r=>r.ok?r.json():{}).then(x=>{if(x&&typeof x.apiBase==='string'&&/^https:\/\//.test(x.apiBase))aiBase=x.apiBase;codeBox.hidden=!aiBase;$('ai-status').textContent=aiBase?(accessCode?'DeepSeek listo para consultar':'Falta código de acceso'):'Análisis local';}).catch(()=>{$('ai-status').textContent='Análisis local';});
 render();setInterval(()=>{if(paused)return;minute+=speed;if(minute>=DAY){minute%=DAY;day++;}render();},1000);
+
+const codeBox=document.createElement('div');
+codeBox.className='access-box';
+codeBox.hidden=true;
+const codeLabel=document.createElement('label');
+codeLabel.htmlFor='access-code';
+codeLabel.textContent='Código de acceso a DeepSeek';
+const codeInput=document.createElement('input');
+codeInput.id='access-code';
+codeInput.type='password';
+codeInput.autocomplete='off';
+codeInput.placeholder='Escribe el código privado';
+codeInput.value=accessCode;
+const codeSave=document.createElement('button');
+codeSave.type='button';
+codeSave.textContent='Guardar código';
+codeSave.addEventListener('click',()=>{
+  accessCode=codeInput.value.trim();
+  if(accessCode)sessionStorage.setItem('habita-ai-code',accessCode);
+  else sessionStorage.removeItem('habita-ai-code');
+  $('ai-status').textContent=accessCode?'DeepSeek listo para consultar':'Falta código de acceso';
+});
+codeBox.append(codeLabel,codeInput,codeSave);
+$('messages').before(codeBox);
 
