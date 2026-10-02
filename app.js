@@ -1,96 +1,82 @@
-const $ = id => document.getElementById(id);
-const DAY = 1440;
-const colors = ['#0a9d9c','#f1b43b','#8d6bd4','#3e94cc','#d87079','#5da76b'];
-const defaults = [
-  {id:'ac',name:'Aire acondicionado',kind:'ac',watts:953,source:'Nominal · placa',enabled:true},
-  {id:'lights',name:'Iluminación · 2 lámparas',kind:'lights',watts:36,source:'Nominal · 18 W c/u',enabled:true},
-  {id:'tv',name:'Televisor · 32 pulgadas',kind:'tv',watts:56,source:'Supuesto provisional',enabled:true}
-];
+const $=id=>document.getElementById(id);
+const {Simulation,defaults,DAY}=HabitaSimulation;
+const colors=['#0a9d9c','#f1b43b','#8d6bd4','#3e94cc','#d87079','#5da76b'];
 let extras=[];
-try { const saved=JSON.parse(localStorage.getItem('habita-devices')||'[]'); if(Array.isArray(saved)) extras=saved.filter(x=>x&&typeof x.name==='string'&&Number.isFinite(x.watts)&&x.watts>0&&x.watts<=5000).slice(0,12); } catch {}
-let devices=[...defaults,...extras];
-let overrides={};
-let minute=19*60+30, day=1, speed=2, paused=false, model=null, aiBase='', automationEnabled=true, lastAutomation='';
-let accessCode=sessionStorage.getItem('habita-ai-code')||'';
-const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
+try{const saved=JSON.parse(localStorage.getItem('habita-devices')||'[]');if(Array.isArray(saved))extras=saved.filter(d=>d&&typeof d.id==='string'&&d.id.startsWith('extra-')&&typeof d.name==='string'&&Number.isFinite(d.watts)&&d.watts>0&&d.watts<=5000).slice(0,12);}catch{}
+const sim=new Simulation([...defaults,...extras]);
+const simulationControls=document.querySelectorAll('.clock button,#automation,#scenario,#idle-wait,#add');
+simulationControls.forEach(el=>el.disabled=true);
+let speed=2,paused=false,aiBase='',accessCode='',selectedDay='current',initialized=false;
+try{accessCode=sessionStorage.getItem('habita-ai-code')||'';}catch{}
 const fmt=n=>Math.round(n).toLocaleString('es-CO');
-const hour=m=>m/60;
-const timeLabel=m=>`${String(Math.floor((m%DAY)/60)).padStart(2,'0')}:${String(Math.floor(m%60)).padStart(2,'0')}`;
-function occupancy(m){const h=hour(m);return +(h>=6.7&&h<8.2||h>=12.1&&h<13.2||h>=18&&h<23.8||h<6.4);}
-function motion(m){return occupancy(m) && Math.sin(m/8)>-0.25;}
-function minutesSinceMotion(m){for(let elapsed=0;elapsed<=120;elapsed+=2)if(motion((m-elapsed+DAY)%DAY))return elapsed;return 121;}
-function schedule(d,m){const h=hour(m);if(d.kind==='ac')return (h>=12&&h<15.5||h>=19&&h<23.7)&&Math.sin(m/42)>-0.15;if(d.kind==='lights')return h>=18.3&&h<23.3||h>=5.8&&h<6.7;if(d.kind==='tv')return h>=19.2&&h<22.5;return false;}
-function on(d,m){return overrides[d.id]===undefined?schedule(d,m):overrides[d.id];}
-function watt(d,m){if(!d.enabled||!on(d,m))return 0;if(d.kind==='ac')return Math.round(d.watts*(.82+.13*Math.sin(m/17)**2));if(d.kind==='tv')return Math.round(d.watts*(.89+.09*Math.sin(m/13)**2));return d.watts;}
-function total(m){return devices.reduce((n,d)=>n+watt(d,m),0);}
-function ambient(m){const h=hour(m),ac=on(devices[0],m);return {t:clamp(27.3+1.75*Math.sin((h-8)/24*2*Math.PI)-(ac?1.65:0)+.18*Math.sin(m/47),22,31),rh:clamp(65+8*Math.sin((h+3)/24*2*Math.PI)+(ac?-5:0),35,90)};}
-function probability(m,a){if(!model)return null;const h=hour(m),x=[1,occupancy(m),Math.sin(2*Math.PI*h/24),Math.cos(2*Math.PI*h/24),0,(a.t-27)/5,(a.rh-70)/20,+on(devices[0],m)];const z=x.reduce((s,v,i)=>s+v*model.coefficients[i],0);return 1/(1+Math.exp(-z));}
-function points(values,w,h,pad=2){const min=Math.min(...values),max=Math.max(...values),span=Math.max(1,max-min);return values.map((v,i)=>`${(pad+i*(w-2*pad)/(values.length-1)).toFixed(1)},${(h-pad-(v-min)/span*(h-2*pad)).toFixed(1)}`).join(' ');}
-function spark(id,fn,color){const vals=Array.from({length:24},(_,i)=>fn((minute-23*10+i*10+DAY)%DAY));$(id).innerHTML=`<polyline fill="none" stroke="${color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" points="${points(vals,120,28)}"/>`;}
-function icon(kind){return ({ac:'▱',lights:'☼',tv:'▣'})[kind]||'ϟ';}
-function saveExtras(){try{localStorage.setItem('habita-devices',JSON.stringify(devices.filter(d=>!['ac','lights','tv'].includes(d.id))));}catch{}}
-function renderDevices(){const host=$('devices');host.replaceChildren();devices.forEach((d,i)=>{const card=document.createElement('article');card.className='device';const top=document.createElement('div');top.className='device-top';const glyph=document.createElement('span');glyph.className='device-icon';glyph.textContent=icon(d.kind);const toggle=document.createElement('button');toggle.type='button';toggle.className='switch'+(on(d,minute)?' on':'');toggle.setAttribute('role','switch');toggle.setAttribute('aria-checked',String(on(d,minute)));toggle.setAttribute('aria-label',`${d.name}: cambiar estado simulado`);toggle.addEventListener('click',()=>{overrides[d.id]=!on(d,minute);render();});top.append(glyph,toggle);const title=document.createElement('h3');title.textContent=d.name;const sub=document.createElement('div');sub.className='device-sub';sub.textContent=d.source;const foot=document.createElement('div');foot.className='device-foot';const val=document.createElement('strong');val.textContent=`${fmt(watt(d,minute))} W`;const note=document.createElement('small');note.textContent=on(d,minute)?'Encendido · simulado':'Apagado · simulado';foot.append(val,note);card.append(top,title,sub,foot);if(!['ac','lights','tv'].includes(d.id)){const remove=document.createElement('button');remove.className='device-remove';remove.type='button';remove.textContent='Eliminar equipo';remove.addEventListener('click',()=>{devices=devices.filter(x=>x.id!==d.id);delete overrides[d.id];saveExtras();render();});card.append(remove);}host.append(card);});}
-function renderBreakdown(){const host=$('breakdown');host.replaceChildren();const max=Math.max(1,...devices.map(d=>watt(d,minute)));devices.forEach((d,i)=>{const wrap=document.createElement('div');const row=document.createElement('div');row.className='break-line';const name=document.createElement('span');const swatch=document.createElement('i');swatch.className='swatch';swatch.style.background=colors[i%colors.length];name.append(swatch,document.createTextNode(d.name));const amount=document.createElement('strong');amount.textContent=`${fmt(watt(d,minute))} W`;row.append(name,amount);const meter=document.createElement('div');meter.className='meter';const fill=document.createElement('i');fill.style.background=colors[i%colors.length];fill.style.width=`${watt(d,minute)/max*100}%`;meter.append(fill);wrap.append(row,meter);host.append(wrap);});$('sum').textContent=`${fmt(total(minute))} W`;}
-function runAutomation(){
-  const idle=minutesSinceMotion(minute), p=model?probability(minute,ambient(minute)):null;
-  if(automationEnabled && on(devices[0],minute) && idle>=30 && p!==null && p<0.35){
-    overrides.ac=false; lastAutomation=`Automatización simulada: aire apagado tras ${idle} min sin movimiento y con ${Math.round(p*100)} % de ocupación estimada.`;
-  }
-  const status=$('automation-status');
-  if(status)status.textContent=lastAutomation||`Movimiento simulado: ${motion(minute)?'detectado':'no detectado'} · ${idle} min desde la última actividad`;
+const decimal=n=>n.toLocaleString('es-CO',{minimumFractionDigits:3,maximumFractionDigits:3});
+const timeLabel=m=>m===DAY?'24:00':`${String(Math.floor(m/60)).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`;
+const iconPaths={ac:'M4 5h16v9H4z M7 9h10 M7 18v3 M12 17v4 M17 18v3',lights:'M9 18h6 M10 21h4 M8 14a6 6 0 1 1 8 0l-1 2H9z',tv:'M3 5h18v13H3z M8 22h8 M12 18v4',extra:'M13 2 4 14h7l-1 8 10-12h-7z',temp:'M9 14V5a3 3 0 0 1 6 0v9a5 5 0 1 1-6 0 M12 9v9',hum:'M12 2S4 11 4 15a8 8 0 0 0 16 0c0-4-8-13-8-13z',occ:'M9 10a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M2 22v-4a7 7 0 0 1 14 0v4 M18 4a3 3 0 0 1 0 6 M19 14a5 5 0 0 1 3 4v4'};
+const svgIcon=kind=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${iconPaths[kind]||iconPaths.extra}"/></svg>`;
+document.querySelectorAll('.ico').forEach(el=>{el.innerHTML=svgIcon(el.classList.contains('temp')?'temp':el.classList.contains('hum')?'hum':el.classList.contains('occ')?'occ':'extra');});
+function saveExtras(){try{localStorage.setItem('habita-devices',JSON.stringify(sim.devices.filter(d=>d.id.startsWith('extra-'))));}catch{}}
+function spark(id,key,color){
+  const values=sim.history.slice(-60).filter((_,i)=>i%2===0).map(s=>s[key]);values.push(sim.snapshot()[key]);if(values.length===1)values.unshift(values[0]);
+  const low=Math.min(...values),span=Math.max(1,Math.max(...values)-low),points=values.map((v,i)=>`${2+i*116/(values.length-1)},${26-(v-low)/span*24}`).join(' ');
+  $(id).innerHTML=`<polyline fill="none" stroke="${color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" points="${points}"/>`;
 }
-function renderChart(){const svg=$('chart'),samples=Array.from({length:145},(_,i)=>total(i*10)),max=Math.max(1000,...samples)*1.08,left=43,right=704,top=15,bottom=211;const x=i=>left+i/(samples.length-1)*(right-left),y=p=>bottom-p/max*(bottom-top);const line=samples.map((v,i)=>`${i?'L':'M'}${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(' ');const current=x(minute/10),energy=samples.slice(0,-1).reduce((s,v)=>s+v/6/1000,0);svg.innerHTML=`<defs><linearGradient id="area" x1="0" x2="0" y1="0" y2="1"><stop stop-color="#28b9b0" stop-opacity=".26"/><stop offset="1" stop-color="#28b9b0" stop-opacity=".02"/></linearGradient></defs>${[0,.25,.5,.75,1].map(f=>`<line x1="${left}" x2="${right}" y1="${y(max*f)}" y2="${y(max*f)}" stroke="#e6eff1"/><text x="1" y="${y(max*f)+4}" fill="#8297a0" font-size="11">${(max*f/1000).toFixed(1)}</text>`).join('')}<path d="${line} L${right} ${bottom} L${left} ${bottom} Z" fill="url(#area)"/><path d="${line}" fill="none" stroke="#099d9b" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><line x1="${current}" x2="${current}" y1="${top}" y2="${bottom}" stroke="#215c70" stroke-dasharray="5 5"/><circle cx="${current}" cy="${y(total(minute))}" r="5" fill="#0b7885" stroke="white" stroke-width="2"/>`;$('daily-energy').textContent=`${energy.toFixed(2).replace('.',',')} kWh/día`;}
-function renderPrediction(a){const p=probability(minute,a);if(p===null)return;$('prob').textContent=`${Math.round(p*100)} %`;$('progress').style.width=`${p*100}%`;const likely=p>=model.threshold;$('advice').textContent=likely?'El modelo estima mayor probabilidad de ocupación. Mantén el confort y revisa el consumo antes de cambiar el aire.':'El modelo estima menor probabilidad de ocupación. Verifica si hay personas antes de considerar apagar algún equipo.';const t=model.test;$('evidence').textContent=`Modelo entrenado con datos sintéticos. En prueba, exactitud ${(t.accuracy_model*100).toFixed(1)} % frente a ${(t.accuracy_baseline*100).toFixed(1)} % de una regla simple; Brier ${t.brier_model.toFixed(3)} frente a ${t.brier_baseline.toFixed(3)}. La regla obtuvo más aciertos. No existe evidencia de ahorro real ni autorización para controlar el aire con esta predicción.`;}
-function render(){const a=ambient(minute);$('time').textContent=timeLabel(minute);$('day').textContent=`Día simulado ${day}`;$('rate').textContent=`1 s = ${speed} min`;$('temp').textContent=`${a.t.toFixed(1).replace('.',',')} °C`;$('humidity').textContent=`${Math.round(a.rh)} %`;$('occupancy').textContent=`${occupancy(minute)} ${occupancy(minute)===1?'persona':'personas'}`;$('power').textContent=`${fmt(total(minute))} W`;spark('spark-temp',m=>ambient(m).t,'#0ca994');spark('spark-humidity',m=>ambient(m).rh,'#2987cc');spark('spark-occupancy',occupancy,'#36ab65');spark('spark-power',total,'#8465c6');renderDevices();renderBreakdown();renderChart();renderPrediction(a);}
+function renderDevices(){
+  const host=$('devices'),wanted=new Set(sim.devices.map(d=>d.id));for(const card of [...host.children])if(!wanted.has(card.dataset.id))card.remove();
+  sim.devices.forEach(d=>{
+    let card=[...host.children].find(c=>c.dataset.id===d.id);
+    if(!card){card=document.createElement('article');card.className='device';card.dataset.id=d.id;card.innerHTML=`<div class="device-top"><span class="device-icon">${svgIcon(d.kind)}</span><button type="button" class="switch" role="switch"></button></div><h3></h3><div class="device-sub"></div><div class="device-foot"><strong></strong><small></small></div>`;card.querySelector('h3').textContent=d.name;card.querySelector('.device-sub').textContent=d.source;card.querySelector('.switch').addEventListener('click',()=>{sim.toggle(d.id);render();});
+      if(d.id.startsWith('extra-')){const remove=document.createElement('button');remove.type='button';remove.className='device-remove';remove.textContent='Eliminar equipo';remove.addEventListener('click',()=>{sim.remove(d.id);saveExtras();render();});card.append(remove);}host.append(card);}
+    const on=sim.on(d),toggle=card.querySelector('.switch');toggle.classList.toggle('on',on);toggle.setAttribute('aria-checked',String(on));toggle.setAttribute('aria-label',`${d.name}: ${on?'apagar':'encender'} en la simulación`);card.querySelector('.device-foot strong').textContent=`${fmt(sim.watts(d))} W`;card.querySelector('.device-foot small').textContent=sim.autoOff.has(d.id)?'Apagado automático':`${on?'Encendido':'Apagado'} · simulado`;
+  });
+}
+function renderBreakdown(s){
+  const host=$('breakdown');host.replaceChildren();const max=Math.max(1,...s.devices.map(d=>d.power_w));
+  s.devices.forEach((d,i)=>{const wrap=document.createElement('div'),row=document.createElement('div');row.className='break-line';const name=document.createElement('span'),swatch=document.createElement('i');swatch.className='swatch';swatch.style.background=colors[i%colors.length];name.append(swatch,document.createTextNode(d.name));const amount=document.createElement('strong');amount.textContent=`${fmt(d.power_w)} W`;row.append(name,amount);const meter=document.createElement('div'),fill=document.createElement('i');meter.className='meter';fill.style.background=colors[i%colors.length];fill.style.width=`${d.power_w/max*100}%`;meter.append(fill);wrap.append(row,meter);host.append(wrap);});$('sum').textContent=`${fmt(s.power_w)} W`;
+}
+function viewed(){return selectedDay==='current'?{day:sim.day,history:sim.history,energy:sim.energy,referenceEnergy:sim.referenceEnergy}:sim.completed.find(d=>String(d.day)===selectedDay)||{day:sim.day,history:sim.history,energy:sim.energy,referenceEnergy:sim.referenceEnergy};}
+function renderDayOptions(){const select=$('history-day'),key=`${sim.day}-${sim.completed.map(d=>d.day).join(',')}`;if(select.dataset.key===key)return;select.dataset.key=key;select.replaceChildren(new Option(`Día ${sim.day} · en curso`,'current'),...sim.completed.slice().reverse().map(d=>new Option(`Día ${d.day} · completo`,String(d.day))));if(![...select.options].some(o=>o.value===selectedDay))selectedDay='current';select.value=selectedDay;}
+function renderChart(){
+  const v=viewed(),samples=v.history.filter((_,i)=>i%4===0).map(s=>({...s})),last=v.history.at(-1);if(last&&samples.at(-1)?.minute!==last.minute)samples.push(last);if(selectedDay==='current')samples.push(sim.snapshot());
+  const max=Math.max(1000,...samples.flatMap(s=>[s.power_w,s.reference_w]))*1.08,left=43,right=704,top=15,bottom=211,x=m=>left+m/DAY*(right-left),y=p=>bottom-p/max*(bottom-top);
+  const path=key=>samples.map((s,i)=>i?`H${x(s.minute).toFixed(1)} V${y(s[key]).toFixed(1)}`:`M${x(s.minute).toFixed(1)} ${y(s[key]).toFixed(1)}`).join(' ');
+  $('chart').innerHTML=`${[0,.25,.5,.75,1].map(f=>`<line x1="${left}" x2="${right}" y1="${y(max*f)}" y2="${y(max*f)}" stroke="#e6eff1"/><text x="1" y="${y(max*f)+4}" fill="#6a818e" font-size="11">${(max*f/1000).toFixed(1)}</text>`).join('')}<path d="${path('reference_w')}" fill="none" stroke="#a7aebe" stroke-width="2" stroke-dasharray="6 5"/><path d="${path('power_w')}" fill="none" stroke="#099d9b" stroke-width="3" stroke-linecap="round"/>${selectedDay==='current'?`<line x1="${x(sim.minute)}" x2="${x(sim.minute)}" y1="${top}" y2="${bottom}" stroke="#215c70" stroke-dasharray="4 5"/>`:''}`;
+  $('daily-energy').textContent=`${decimal(v.energy)} kWh acumulados`;$('energy-reference').textContent=`${decimal(v.referenceEnergy)} kWh`;$('energy-controlled').textContent=`${decimal(v.energy)} kWh`;
+  const delta=v.referenceEnergy-v.energy;$('energy-difference').textContent=`${decimal(delta)} kWh`;$('cost-difference').textContent=`${fmt(delta*sim.tariff)} COP`;
+  $('comparison-period').textContent=`Día ${v.day} · ${v.history.length} min registrados · ${selectedDay==='current'?timeLabel(sim.minute):'24 horas completas'}`;
+  $('comparison-detail').textContent=delta>0?'Menor consumo en el escenario con control. Diferencia de la simulación; no es ahorro medido.':delta<0?'El escenario con control consumió más. La comparación conserva también los resultados desfavorables.':'Todavía no hay diferencia: ambos escenarios han consumido lo mismo.';
+}
+function renderEvents(){const host=$('event-list');host.replaceChildren();if(!sim.events.length){const li=document.createElement('li');li.className='event-empty';li.textContent='Las acciones aparecerán aquí al cambiar equipos, escenarios o reglas.';host.append(li);return;}sim.events.slice(-12).reverse().forEach(e=>{const li=document.createElement('li'),stamp=document.createElement('span'),text=document.createElement('p');li.className=`event ${e.kind}`;stamp.textContent=`Día ${e.day} · ${timeLabel(e.minute)}`;text.textContent=e.message;li.append(stamp,text);host.append(li);});}
+function renderPrediction(s){
+  if(s.probability===null){$('prob').textContent='—';$('advice').textContent='Predicción no disponible. La simulación funciona; la automatización por modelo espera a que este cargue.';return;}
+  const p=s.probability,threshold=sim.model.threshold;$('prob').textContent=`${Math.round(p*100)} %`;$('progress').style.width=`${p*100}%`;
+  $('advice').textContent=sim.scenario==='rest'?'Modo descanso: apagado automático bloqueado para este escenario, aunque no se detecte movimiento.':sim.autoOff.has('ac')?'El aire está apagado por la regla automática. El registro muestra la probabilidad y el tiempo sin movimiento que provocaron la acción.':p>=threshold?'Probabilidad de ocupación por encima del umbral. La regla mantiene el estado del aire.':`Baja probabilidad de ocupación: la regla puede apagar el aire al cumplir ${sim.wait} min sin movimiento. La temperatura no determina esta predicción por sí sola.`;
+  const t=sim.model.test;$('evidence').textContent=`Regresión logística con datos sintéticos y partición cronológica 60/20/20. Umbral compartido: ${(threshold*100).toFixed(1)} %. En prueba: exactitud ${(t.accuracy_model*100).toFixed(1)} % frente a ${(t.accuracy_baseline*100).toFixed(1)} % de persistencia; Brier ${t.brier_model.toFixed(3)} frente a ${t.brier_baseline.toFixed(3)}; costo supuesto ${fmt(t.decision_cost_model_cop)} frente a ${fmt(t.decision_cost_baseline_cop)} COP. La regla simple tuvo más aciertos y menor costo; el modelo obtuvo mejor Brier y menos apagados con ocupantes. Son métricas del conjunto sintético de prueba, no del día del tablero. El modelo recibe presencia binaria, no el número de personas. No hay evidencia de ahorro real. Movimiento ausente no demuestra que un espacio esté vacío.`;
+}
+function render(){const s=sim.snapshot();$('time').textContent=timeLabel(sim.minute);$('day').textContent=`Día simulado ${sim.day}`;$('rate').textContent=`1 s = ${speed} min`;$('temp').textContent=`${s.temperature_c.toFixed(1).replace('.',',')} °C`;$('humidity').textContent=`${Math.round(s.humidity_pct)} %`;$('occupancy').textContent=`${s.people} ${s.people===1?'persona':'personas'}`;$('power').textContent=`${fmt(s.power_w)} W`;
+  $('motion-status').textContent=`${s.motion?'Movimiento detectado':'Sin movimiento'} · ${s.idle} min desde actividad o inicio del escenario`;
+  $('automation-status').textContent=sim.scenario==='rest'?'Descanso: apagado automático bloqueado':!sim.automation?'Automatización desactivada':sim.autoOff.has('ac')?'Aire apagado automáticamente · consulta el registro':`Regla activa · espera ${sim.wait} min · umbral ${sim.model?(sim.model.threshold*100).toFixed(1)+' %':'pendiente'}`;
+  spark('spark-temp','temperature_c','#0ca994');spark('spark-humidity','humidity_pct','#2987cc');spark('spark-occupancy','people','#36ab65');spark('spark-power','power_w','#8465c6');renderDevices();renderBreakdown(s);renderDayOptions();renderChart();renderEvents();renderPrediction(s);
+}
 function appendMessage(text,who){const p=document.createElement('p');p.className=`bubble ${who}`;p.textContent=text;$('messages').append(p);$('messages').scrollTop=$('messages').scrollHeight;}
-function localAnswer(q){const s=q.toLocaleLowerCase('es');const a=ambient(minute);if(/consum|potencia|gasta|equipo|energ[ií]a/.test(s)){const top=[...devices].sort((x,y)=>watt(y,minute)-watt(x,minute))[0];return `Ahora la potencia total estimada es ${fmt(total(minute))} W. ${top&&watt(top,minute)>0?`El mayor aporte es ${top.name}, con ${fmt(watt(top,minute))} W simulados.`:'Todos los equipos están apagados en la simulación.'} No es una medición real.`;}if(/temperatura|humedad|ambiente|calor/.test(s))return `En esta escena simulada hay ${a.t.toFixed(1).replace('.',',')} °C y ${Math.round(a.rh)} % de humedad relativa. Son valores generados, aún no llegan del BME680.`;if(/ocupaci|persona|predic|modelo/.test(s)){const p=probability(minute,a);return p===null?'El modelo aún no termina de cargar.':`Hay ${occupancy(minute)} personas simuladas ahora. El modelo estima ${Math.round(p*100)} % de probabilidad de ocupación dentro de 30 minutos. Se entrenó solo con datos sintéticos.`;}return 'Puedo analizar temperatura, humedad, ocupación y consumo de este tablero simulado. Para conversar libremente con DeepSeek falta conectar el servidor privado; nunca pondremos la clave en GitHub Pages.';}
-async function askAI(question){
-  if(!aiBase)return localAnswer(question);
-  if(!accessCode)return 'Introduce el código de acceso al asistente para consultar DeepSeek.';
-  try {
-    const r=await fetch(`${aiBase.replace(/\/$/,'')}/api/chat`,{
-      method:'POST',
-      headers:{'content-type':'application/json','x-app-code':accessCode},
-      body:JSON.stringify({question,context:{time:timeLabel(minute),temperature_c:+ambient(minute).t.toFixed(1),humidity_pct:Math.round(ambient(minute).rh),occupancy:occupancy(minute),power_w:total(minute),devices:devices.map(d=>({name:d.name,power_w:watt(d,minute)})),data_origin:'simulated'}})
-    });
-    const data=await r.json().catch(()=>({}));
-    if(r.status===401)return 'Código de acceso incorrecto. Revísalo e inténtalo de nuevo.';
-    if(!r.ok)throw Error(data.error||'Servidor no disponible');
-    return typeof data.answer==='string'?data.answer:localAnswer(question);
-  } catch {
-    return `${localAnswer(question)} DeepSeek no respondió; esta es una respuesta local limitada.`;
-  }
+function localAnswer(q){const text=q.toLocaleLowerCase('es'),s=sim.snapshot();
+  if(/ahorr|compar|costo|pesos/.test(text)){const v=viewed();return `Día ${v.day}, ${v.history.length} minutos registrados: ${decimal(v.referenceEnergy)} kWh sin automatización y ${decimal(v.energy)} kWh con control. Diferencia: ${decimal(v.referenceEnergy-v.energy)} kWh, valorada en ${fmt((v.referenceEnergy-v.energy)*sim.tariff)} COP a la tarifa supuesta actual. No es ahorro medido.`;}
+  if(/consum|potencia|gasta|equipo|energ[ií]a/.test(text)){const top=[...s.devices].sort((a,b)=>b.power_w-a.power_w)[0];return `Potencia estimada: ${fmt(s.power_w)} W. ${top?.power_w>0?`El mayor aporte es ${top.name}: ${fmt(top.power_w)} W.`:'Todos los equipos están apagados.'} Son valores simulados.`;}
+  if(/temperatura|humedad|ambiente|calor/.test(text))return `Temperatura simulada: ${s.temperature_c.toFixed(1)} °C; humedad: ${Math.round(s.humidity_pct)} %. Todavía no proceden del BME680.`;
+  if(/ocupaci|persona|predic|modelo|movimiento/.test(text))return `${s.people} personas en el escenario, ${s.motion?'con':'sin'} movimiento detectado. ${s.probability===null?'Modelo no disponible.':`Probabilidad de presencia dentro de 30 minutos: ${(s.probability*100).toFixed(1)} %.`} El conteo y el movimiento son variables separadas; no se atribuye conteo a un sensor de movimiento.`;
+  return 'El análisis local explica consumo, ambiente, ocupación y comparación energética. La conversación libre requiere una respuesta comprobada del servidor de DeepSeek.';
 }
-$('pause').addEventListener('click',()=>{paused=!paused;$('pause').textContent=paused?'Reanudar':'Pausar';});$('speed').addEventListener('click',()=>{speed=speed===2?8:2;$('speed').textContent=speed===2?'Velocidad ×4':'Velocidad normal';render();});$('reset').addEventListener('click',()=>{minute=19*60+30;day=1;overrides={};render();});
-const dialog=$('device-dialog');$('add').addEventListener('click',()=>dialog.showModal());$('close').addEventListener('click',()=>dialog.close());$('cancel').addEventListener('click',()=>dialog.close());$('device-form').addEventListener('submit',e=>{e.preventDefault();const name=$('new-name').value.trim(),watts=Number($('new-watts').value);if(!name||!Number.isFinite(watts)||watts<1||watts>5000||devices.length>=15)return;devices.push({id:`extra-${Date.now()}`,name,kind:'extra',watts,source:'Potencia supuesta',enabled:true});saveExtras();$('device-form').reset();dialog.close();render();});
-$('chat-form').addEventListener('submit',async e=>{e.preventDefault();const input=$('question'),q=input.value.trim();if(!q)return;appendMessage(q,'user');input.value='';const button=$('chat-form').querySelector('button');button.disabled=true;button.textContent='Pensando…';appendMessage(await askAI(q),'bot');button.disabled=false;button.textContent='Enviar';});
-fetch('model.json').then(r=>{if(!r.ok)throw Error('Modelo no disponible');return r.json();}).then(x=>{model=x;render();}).catch(()=>{$('advice').textContent='No se pudo cargar el modelo. La simulación continúa, pero la predicción está deshabilitada.';});
-fetch('config.json').then(r=>r.ok?r.json():{}).then(x=>{if(x&&typeof x.apiBase==='string'&&/^https:\/\//.test(x.apiBase))aiBase=x.apiBase;codeBox.hidden=!aiBase;$('ai-status').textContent=aiBase?(accessCode?'DeepSeek listo para consultar':'Falta código de acceso'):'Análisis local';}).catch(()=>{$('ai-status').textContent='Análisis local';});
-const automation=$('automation');
-if(automation)automation.addEventListener('change',()=>{automationEnabled=automation.checked;lastAutomation=automationEnabled?'':'Automatización simulada desactivada.';runAutomation();});
-render();setInterval(()=>{if(paused)return;minute+=speed;if(minute>=DAY){minute%=DAY;day++;}runAutomation();render();},1000);
-
-const codeBox=document.createElement('div');
-codeBox.className='access-box';
-codeBox.hidden=true;
-const codeLabel=document.createElement('label');
-codeLabel.htmlFor='access-code';
-codeLabel.textContent='Código de acceso a DeepSeek';
-const codeInput=document.createElement('input');
-codeInput.id='access-code';
-codeInput.type='password';
-codeInput.autocomplete='off';
-codeInput.placeholder='Escribe el código privado';
-codeInput.value=accessCode;
-const codeSave=document.createElement('button');
-codeSave.type='button';
-codeSave.textContent='Guardar código';
-codeSave.addEventListener('click',()=>{
-  accessCode=codeInput.value.trim();
-  if(accessCode)sessionStorage.setItem('habita-ai-code',accessCode);
-  else sessionStorage.removeItem('habita-ai-code');
-  $('ai-status').textContent=accessCode?'DeepSeek listo para consultar':'Falta código de acceso';
-});
-codeBox.append(codeLabel,codeInput,codeSave);
-$('messages').before(codeBox);
-
+async function askAI(question){
+  if(!aiBase){$('ai-status').textContent='Respuesta local';return localAnswer(question);}if(!accessCode){$('ai-status').textContent='Falta código de acceso';return 'Introduce el código privado para consultar DeepSeek. '+localAnswer(question);}
+  $('ai-status').textContent='Consultando DeepSeek…';const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),25000);
+  try{const s=sim.snapshot(),v=viewed();const r=await fetch(`${aiBase.replace(/\/$/,'')}/api/chat`,{method:'POST',signal:controller.signal,headers:{'content-type':'application/json','x-app-code':accessCode},body:JSON.stringify({question,context:{time:timeLabel(sim.minute),temperature_c:+s.temperature_c.toFixed(1),humidity_pct:Math.round(s.humidity_pct),occupancy:s.people,motion:s.motion,power_w:s.power_w,devices:s.devices.map(d=>({name:d.name,power_w:d.power_w})),energy_kwh:v.energy,reference_kwh:v.referenceEnergy,data_origin:'simulated'}})});const data=await r.json().catch(()=>({}));if(r.status===401){$('ai-status').textContent='Código rechazado';return 'El servidor rechazó el código. '+localAnswer(question);}if(!r.ok||typeof data.answer!=='string'||!data.answer.trim())throw Error('Respuesta no válida');$('ai-status').textContent='Respuesta de DeepSeek';return data.answer;
+  }catch{$('ai-status').textContent='Respuesta local · sin conexión IA';return localAnswer(question)+' DeepSeek no respondió; este texto es análisis local.';}finally{clearTimeout(timer);}
+}
+function exportHistory(){const v=viewed();if(!v.history.length)return;const quote=s=>'"'+String(s).replace(/"/g,'""')+'"',rows=[['dia_simulado','minuto','hora','temperatura_c','humedad_pct','personas_simuladas','movimiento_simulado','potencia_control_w','potencia_sin_automatizacion_w','energia_control_kwh','energia_sin_automatizacion_kwh','automatizacion_activa','probabilidad_ocupacion_30min','origen','equipos_json']];v.history.forEach(s=>rows.push([s.day,s.minute,timeLabel(s.minute),s.temperature_c.toFixed(3),s.humidity_pct.toFixed(3),s.people,Number(s.motion),s.power_w,s.reference_w,s.energy_kwh.toFixed(6),s.reference_kwh.toFixed(6),Number(s.automation_enabled),s.probability===null?'':s.probability.toFixed(6),'simulado',JSON.stringify(s.devices)]));const blob=new Blob(['\uFEFF'+rows.map(r=>r.map(quote).join(';')).join('\r\n')],{type:'text/csv;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`habita-dia-simulado-${v.day}.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+$('pause').addEventListener('click',()=>{paused=!paused;$('pause').textContent=paused?'Reanudar':'Pausar';});$('speed').addEventListener('click',()=>{speed=speed===2?8:2;$('speed').textContent=speed===2?'Velocidad ×4':'Velocidad normal';render();});$('reset').addEventListener('click',()=>{sim.reset();selectedDay='current';render();});
+$('automation').addEventListener('change',()=>{sim.setAutomation($('automation').checked);render();});$('scenario').addEventListener('change',()=>{sim.setScenario($('scenario').value);render();});$('idle-wait').addEventListener('change',()=>{sim.setWait(Number($('idle-wait').value));$('idle-wait').value=sim.wait;render();});$('tariff').addEventListener('change',()=>{const n=Number($('tariff').value);if(Number.isFinite(n)&&n>=0&&n<=10000)sim.tariff=n;$('tariff').value=sim.tariff;render();});$('history-day').addEventListener('change',()=>{selectedDay=$('history-day').value;render();});$('export-history').addEventListener('click',exportHistory);
+const dialog=$('device-dialog');$('add').addEventListener('click',()=>dialog.showModal());$('close').addEventListener('click',()=>dialog.close());$('cancel').addEventListener('click',()=>dialog.close());$('device-form').addEventListener('submit',e=>{e.preventDefault();const name=$('new-name').value.trim(),watts=Number($('new-watts').value);if(!name||!Number.isFinite(watts)||watts<1||watts>5000||sim.devices.length>=15)return;sim.add({id:`extra-${Date.now()}`,name,kind:'extra',watts,source:'Potencia supuesta',enabled:true});saveExtras();$('device-form').reset();dialog.close();render();});
+$('chat-form').addEventListener('submit',async e=>{e.preventDefault();const input=$('question'),q=input.value.trim();if(!q)return;appendMessage(q,'user');input.value='';const button=$('chat-form').querySelector('button');button.disabled=true;button.textContent='Pensando…';try{appendMessage(await askAI(q),'bot');}finally{button.disabled=false;button.textContent='Enviar';}});
+const codeBox=document.createElement('div');codeBox.className='access-box';codeBox.hidden=true;const codeLabel=document.createElement('label');codeLabel.htmlFor='access-code';codeLabel.textContent='Código de acceso a DeepSeek';const codeInput=document.createElement('input');codeInput.id='access-code';codeInput.type='password';codeInput.autocomplete='off';codeInput.placeholder='Código privado';codeInput.value=accessCode;const codeSave=document.createElement('button');codeSave.type='button';codeSave.textContent='Guardar código';codeSave.addEventListener('click',()=>{accessCode=codeInput.value.trim();try{if(accessCode)sessionStorage.setItem('habita-ai-code',accessCode);else sessionStorage.removeItem('habita-ai-code');}catch{}$('ai-status').textContent=accessCode?'Conexión pendiente de comprobar':'Falta código de acceso';});codeBox.append(codeLabel,codeInput,codeSave);$('messages').before(codeBox);
+fetch('model.json').then(r=>{if(!r.ok)throw Error('Modelo no disponible');return r.json();}).then(m=>{if(!Array.isArray(m.coefficients)||m.coefficients.length!==8||!m.coefficients.every(Number.isFinite)||!Number.isFinite(m.threshold)||m.threshold<=0||m.threshold>=1||!m.test)throw Error('Modelo inválido');sim.model=m;}).catch(()=>{$('evidence').textContent='No se pudo cargar el modelo. No se ejecutan apagados automáticos basados en una predicción.';}).finally(()=>{sim.advance(19*60+30);initialized=true;simulationControls.forEach(el=>el.disabled=false);render();});
+fetch('config.json').then(r=>r.ok?r.json():{}).then(c=>{if(c&&typeof c.apiBase==='string'&&/^https:\/\//.test(c.apiBase))aiBase=c.apiBase;codeBox.hidden=!aiBase;$('ai-status').textContent=aiBase?(accessCode?'Conexión pendiente de comprobar':'Falta código de acceso'):'Análisis local';}).catch(()=>{$('ai-status').textContent='Análisis local';});
+render();setInterval(()=>{if(paused||!initialized)return;sim.advance(speed);render();},1000);
